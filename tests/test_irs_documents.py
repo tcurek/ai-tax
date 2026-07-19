@@ -10,6 +10,7 @@ from ai_tax.utils.irs_documents import (
     IrsDocument,
     IrsDocumentRepository,
     IrsDocumentType,
+    IrsXmlSourceDocument,
     classify_irs_document,
 )
 
@@ -113,6 +114,68 @@ def test_fetch_and_convert_stores_instruction_pdf_and_markdown(tmp_path: Path) -
     assert stored.pdf_path.read_bytes() == b"%PDF instruction"
     assert stored.markdown_path.read_text(encoding="utf-8") == "# IRS document\n\nConverted content."
     assert converter.sources == [stored.pdf_path]
+
+
+def test_search_xml_sources_returns_zip_results_for_year(tmp_path: Path) -> None:
+    html = """
+    <table><tbody>
+      <tr>
+        <td><a href="/pub/irs-sgml/p17.zip">Publication 17</a></td>
+        <td>Your Federal Income Tax (For Individuals)</td>
+        <td>2025</td>
+        <td>01/21/2026</td>
+      </tr>
+      <tr>
+        <td><a href="/pub/irs-sgml/i56.zip">Instruction 56</a></td>
+        <td>Instructions for Form 56</td>
+        <td>Jun 2026</td>
+        <td>06/16/2026</td>
+      </tr>
+      <tr>
+        <td><a href="/pub/irs-sgml/p334.zip">Publication 334</a></td>
+        <td>Tax Guide For Small Business</td>
+        <td>2024</td>
+        <td>02/12/2025</td>
+      </tr>
+    </tbody></table>
+    """
+    opened_urls: list[str] = []
+
+    def fake_opener(request: Any) -> FakeResponse:
+        opened_urls.append(request.full_url)
+        return FakeResponse(html.encode() if "page=0" in request.full_url else b"")
+
+    results = IrsDocumentRepository(root=tmp_path, opener=fake_opener).search_xml_sources("publication 17", 2025, max_pages=2)
+
+    assert [(document.filename, document.document_type, document.revision) for document in results] == [
+        ("p17.zip", IrsDocumentType.PUBLICATION, "2025"),
+    ]
+    assert results[0].source_url == "https://www.irs.gov/pub/irs-sgml/p17.zip"
+    assert opened_urls == [
+        "https://www.irs.gov/instructions-and-publications-xml-source-files?find=publication+17&items_per_page=200&page=0",
+        "https://www.irs.gov/instructions-and-publications-xml-source-files?find=publication+17&items_per_page=200&page=1",
+    ]
+
+
+def test_fetch_xml_source_stores_zip_under_year_xml_dir(tmp_path: Path) -> None:
+    document = IrsXmlSourceDocument(
+        year=2025,
+        product_number="p17",
+        title="Your Federal Income Tax",
+        revision="2025",
+        posted="01/21/2026",
+        source_url="https://www.irs.gov/pub/irs-sgml/p17.zip",
+        filename="p17.zip",
+        document_type=IrsDocumentType.PUBLICATION,
+    )
+
+    stored = IrsDocumentRepository(
+        root=tmp_path,
+        opener=lambda request: FakeResponse(b"PK fake zip"),
+    ).fetch_xml_source(document)
+
+    assert stored.zip_path == tmp_path / "2025" / "xml" / "p17.zip"
+    assert stored.zip_path.read_bytes() == b"PK fake zip"
 
 
 def test_fetch_and_convert_skips_existing_pdf_and_markdown(tmp_path: Path) -> None:

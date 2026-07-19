@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_IRS_ROOT = Path(__file__).resolve().parents[1] / "irs"
 DEFAULT_IRS_SEARCH_URL = "https://www.irs.gov/prior-year-forms-and-instructions"
+DEFAULT_IRS_XML_SOURCE_URL = "https://www.irs.gov/instructions-and-publications-xml-source-files"
 DEFAULT_USER_AGENT = "ai-tax/0.1 (+https://github.com/earendil-works/ai-tax)"
 
 
@@ -76,6 +77,63 @@ class _IrsPriorYearLinkParser(HTMLParser):
 
 
 @dataclass(frozen=True, slots=True)
+class _IrsXmlSourceRow:
+    href: str
+    product_number: str
+    title: str
+    revision: str
+    posted: str
+
+
+class _IrsXmlSourceParser(HTMLParser):
+    """Extract XML source ZIP rows from the IRS XML source search page."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[_IrsXmlSourceRow] = []
+        self._in_row = False
+        self._in_cell = False
+        self._current_href: str | None = None
+        self._current_cells: list[str] = []
+        self._current_cell_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self._in_row = True
+            self._current_href = None
+            self._current_cells = []
+        elif tag == "td" and self._in_row:
+            self._in_cell = True
+            self._current_cell_text = []
+        elif tag == "a" and self._in_row:
+            href = dict(attrs).get("href")
+            if href and "/pub/irs-sgml/" in href and href.endswith(".zip"):
+                self._current_href = href
+
+    def handle_data(self, data: str) -> None:
+        if self._in_cell:
+            self._current_cell_text.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "td" and self._in_cell:
+            self._current_cells.append(" ".join("".join(self._current_cell_text).split()))
+            self._in_cell = False
+            self._current_cell_text = []
+        elif tag == "tr" and self._in_row:
+            if self._current_href and len(self._current_cells) >= 4:
+                self.rows.append(
+                    _IrsXmlSourceRow(
+                        href=self._current_href,
+                        product_number=self._current_cells[0],
+                        title=self._current_cells[1],
+                        revision=self._current_cells[2],
+                        posted=self._current_cells[3],
+                    )
+                )
+            self._in_row = False
+
+
+@dataclass(frozen=True, slots=True)
 class IrsDocument:
     """A searchable/fetchable IRS PDF product."""
 
@@ -132,6 +190,47 @@ class IrsStoredDocument:
         return self.markdown_path is not None
 
 
+@dataclass(frozen=True, slots=True)
+class IrsXmlSourceDocument:
+    """An IRS instructions/publications XML source ZIP product."""
+
+    year: int
+    product_number: str
+    title: str
+    revision: str
+    posted: str
+    source_url: str
+    filename: str
+    document_type: IrsDocumentType
+
+    @classmethod
+    def from_xml_source_row(cls, row: _IrsXmlSourceRow, year: int) -> IrsXmlSourceDocument | None:
+        """Build an XML source document from a search row, if it matches ``year``."""
+        if str(year) not in row.revision:
+            return None
+
+        filename = PurePosixPath(row.href).name
+        product_number = filename.removesuffix(".zip")
+        return cls(
+            year=year,
+            product_number=product_number,
+            title=row.title,
+            revision=row.revision,
+            posted=row.posted,
+            source_url=urljoin(DEFAULT_IRS_XML_SOURCE_URL, row.href),
+            filename=filename,
+            document_type=classify_irs_document(product_number=product_number, title=row.product_number),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IrsStoredXmlSource:
+    """Local cache path for an IRS XML source ZIP."""
+
+    document: IrsXmlSourceDocument
+    zip_path: Path
+
+
 class IrsDocumentRepository:
     """Search IRS products and cache PDFs/Markdown locally.
 
@@ -182,7 +281,7 @@ class IrsDocumentRepository:
     def fetch(self, document: IrsDocument, *, overwrite: bool = False) -> IrsStoredDocument:
         """Download/cache ``document`` without Markdown conversion."""
         pdf_path = self.pdf_path_for(document)
-        self._download_pdf(document.source_url, pdf_path, overwrite=overwrite)
+        self._download_file(document.source_url, pdf_path, overwrite=overwrite)
         return IrsStoredDocument(document=document, pdf_path=pdf_path)
 
     def fetch_and_convert(self, document: IrsDocument, *, overwrite: bool = False) -> IrsStoredDocument:
@@ -224,6 +323,33 @@ class IrsDocumentRepository:
 
         return stored_documents
 
+    def search_xml_sources(self, query: str, year: int, *, max_pages: int = 5) -> list[IrsXmlSourceDocument]:
+        """Search IRS XML source ZIPs for instructions/publications matching ``query`` and ``year``."""
+        self._validate_year(year)
+        if not query.strip():
+            raise ValueError("query must not be blank")
+        if max_pages < 1:
+            raise ValueError("max_pages must be at least 1")
+
+        documents_by_filename: dict[str, IrsXmlSourceDocument] = {}
+        for page in range(max_pages):
+            rows = self._fetch_xml_source_rows(search_query=query, page=page)
+            if not rows:
+                break
+
+            for row in rows:
+                document = IrsXmlSourceDocument.from_xml_source_row(row, year)
+                if document is not None:
+                    documents_by_filename.setdefault(document.filename, document)
+
+        return sorted(documents_by_filename.values(), key=lambda document: document.filename)
+
+    def fetch_xml_source(self, document: IrsXmlSourceDocument, *, overwrite: bool = False) -> IrsStoredXmlSource:
+        """Download/cache one IRS XML source ZIP."""
+        zip_path = self.xml_source_zip_path_for(document)
+        self._download_file(document.source_url, zip_path, overwrite=overwrite)
+        return IrsStoredXmlSource(document=document, zip_path=zip_path)
+
     def pdf_path_for(self, document: IrsDocument) -> Path:
         """Return the local PDF cache path for ``document``."""
         return self.root / str(document.year) / self._pdf_subdir(document.document_type) / document.filename
@@ -233,6 +359,10 @@ class IrsDocumentRepository:
         if document.document_type is IrsDocumentType.FORM:
             raise ValueError("IRS forms are not converted to Markdown")
         return self.root / str(document.year) / "markdown" / f"{Path(document.filename).stem}.md"
+
+    def xml_source_zip_path_for(self, document: IrsXmlSourceDocument) -> Path:
+        """Return the local XML source ZIP cache path for ``document``."""
+        return self.root / str(document.year) / "xml" / document.filename
 
     def _fetch_prior_year_links(self, *, search_query: str, page: int) -> list[_IrsPriorYearLink]:
         query = urlencode({"find": search_query, "items_per_page": "200", "page": str(page)})
@@ -252,7 +382,25 @@ class IrsDocumentRepository:
         parser.feed(html)
         return parser.links
 
-    def _download_pdf(self, url: str, destination: Path, *, overwrite: bool = False) -> Path:
+    def _fetch_xml_source_rows(self, *, search_query: str, page: int) -> list[_IrsXmlSourceRow]:
+        query = urlencode({"find": search_query, "items_per_page": "200", "page": str(page)})
+        request = Request(
+            f"{DEFAULT_IRS_XML_SOURCE_URL}?{query}",
+            headers={"User-Agent": self._user_agent},
+        )
+        try:
+            with self._opener(request) as response:
+                html = response.read().decode("utf-8", errors="replace")
+        except HTTPError as exc:
+            raise RuntimeError("IRS XML source search page is unavailable") from exc
+        except URLError as exc:
+            raise RuntimeError("Unable to search IRS XML source files") from exc
+
+        parser = _IrsXmlSourceParser()
+        parser.feed(html)
+        return parser.rows
+
+    def _download_file(self, url: str, destination: Path, *, overwrite: bool = False) -> Path:
         if destination.exists() and not overwrite:
             return destination
 
@@ -262,9 +410,9 @@ class IrsDocumentRepository:
             with self._opener(request) as response:
                 data = response.read()
         except HTTPError as exc:
-            raise RuntimeError(f"IRS PDF not found or unavailable: {url}") from exc
+            raise RuntimeError(f"IRS file not found or unavailable: {url}") from exc
         except URLError as exc:
-            raise RuntimeError(f"Unable to download IRS PDF: {url}") from exc
+            raise RuntimeError(f"Unable to download IRS file: {url}") from exc
 
         destination.write_bytes(data)
         return destination
@@ -315,6 +463,27 @@ def search_irs_documents(query: str, year: int, *, root: Path | str = DEFAULT_IR
 def fetch_irs_document(document: IrsDocument, *, root: Path | str = DEFAULT_IRS_ROOT, overwrite: bool = False) -> IrsStoredDocument:
     """Function-callable wrapper for downloading/caching one IRS PDF."""
     return IrsDocumentRepository(root=root).fetch(document=document, overwrite=overwrite)
+
+
+def search_irs_xml_sources(
+    query: str,
+    year: int,
+    *,
+    root: Path | str = DEFAULT_IRS_ROOT,
+    max_pages: int = 5,
+) -> list[IrsXmlSourceDocument]:
+    """Function-callable wrapper for IRS XML source ZIP search."""
+    return IrsDocumentRepository(root=root).search_xml_sources(query=query, year=year, max_pages=max_pages)
+
+
+def fetch_irs_xml_source(
+    document: IrsXmlSourceDocument,
+    *,
+    root: Path | str = DEFAULT_IRS_ROOT,
+    overwrite: bool = False,
+) -> IrsStoredXmlSource:
+    """Function-callable wrapper for downloading/caching one IRS XML source ZIP."""
+    return IrsDocumentRepository(root=root).fetch_xml_source(document=document, overwrite=overwrite)
 
 
 def fetch_and_convert_irs_document(

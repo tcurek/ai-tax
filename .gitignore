@@ -33,6 +33,8 @@ htmlcov/
 
 # Local config and sensitive tax documents/outputs
 config/app.yaml
+src/ai_tax/irs/**
+!src/ai_tax/irs/.gitkeep
 tax-documents/
 tax-outputs/
 
