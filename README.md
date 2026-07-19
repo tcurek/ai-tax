@@ -67,6 +67,16 @@ Current config fields:
 - `source_tax_documents_dir`: directory containing source tax documents
 - `output_files_dir`: directory where generated output files should be written
 - `rounding_precision`: currency rounding mode; either `nearest_cent` or `whole_dollar`
+- `llm`: LLM provider settings. The initial provider is OpenAI with separate `chat_model` (LangGraph) and `vision_model` (markitdown-ocr) settings. Keep API keys in environment variables such as `OPENAI_API_KEY`, not in YAML.
+
+## LLM client
+
+Use `ai_tax.llm.create_llm_client()` to create one application-level LLM client:
+
+- `client.for_markitdown_ocr().as_kwargs()` returns `llm_client` and `llm_model` arguments accepted by `MarkItDown(enable_plugins=True, ...)` and markitdown-ocr.
+- `client.for_langgraph()` returns a LangChain `ChatOpenAI` chat model suitable for LangGraph nodes.
+
+This keeps OCR and graph workflows on one extensible provider interface while preserving the different adapter shapes required by each library.
 
 Taxpayer details such as name, address, and SSN are intentionally not configured upfront. Future agents should derive needed taxpayer info from provided tax documents and guided user intake.
 

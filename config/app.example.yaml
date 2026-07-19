@@ -8,3 +8,10 @@ output_files_dir: tax-outputs
 # - nearest_cent: rounds 50.349 to 50.35
 # - whole_dollar: rounds 50.349 to 50
 rounding_precision: nearest_cent
+
+# LLM settings. Keep API keys in environment variables only, e.g. OPENAI_API_KEY.
+llm:
+  provider: openai
+  chat_model: gpt-4o-mini
+  vision_model: gpt-4o-mini
+  api_key_env_var: OPENAI_API_KEY

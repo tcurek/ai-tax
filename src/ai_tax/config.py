@@ -9,6 +9,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field
 
+from ai_tax.llm import LLMConfig
+
 RoundingPrecision = Literal["whole_dollar", "nearest_cent"]
 DEFAULT_ROUNDING_PRECISION: RoundingPrecision = "nearest_cent"
 
@@ -24,6 +26,10 @@ class AppConfig(BaseModel):
     rounding_precision: RoundingPrecision = Field(
         default=DEFAULT_ROUNDING_PRECISION,
         description="Currency rounding option: 'whole_dollar' rounds 50.349 to 50; 'nearest_cent' rounds 50.349 to 50.35.",
+    )
+    llm: LLMConfig = Field(
+        default_factory=LLMConfig,
+        description="LLM provider settings. API keys must stay in environment variables.",
     )
 
 
