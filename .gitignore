@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv
+uv.lock
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checking / linting
+.mypy_cache/
+.ruff_cache/
+.pyright/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Local config and sensitive tax documents/outputs
+config/app.yaml
+tax-documents/
+tax-outputs/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

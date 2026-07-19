@@ -1,0 +1,14 @@
+{
+  "lsp": {
+    "pyright": {
+      "settings": {
+        "python": {
+          "pythonPath": "/home/tim/Repos/ai-tax/.venv/bin/python",
+          "analysis": {
+            "extraPaths": ["src"]
+          }
+        }
+      }
+    }
+  }
+}

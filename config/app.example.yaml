@@ -1,0 +1,10 @@
+# Copy this file to config/app.yaml and adjust settings for your local run.
+# Do not put taxpayer PII, tax documents, or secrets in this file.
+
+source_tax_documents_dir: tax-documents
+output_files_dir: tax-outputs
+
+# Currency rounding option:
+# - nearest_cent: rounds 50.349 to 50.35
+# - whole_dollar: rounds 50.349 to 50
+rounding_precision: nearest_cent
